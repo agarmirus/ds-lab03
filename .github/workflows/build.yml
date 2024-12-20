@@ -1,0 +1,97 @@
+name: GitHub Classroom Workflow
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+jobs:
+  build:
+    name: Autograding
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - uses: docker/setup-buildx-action@v2
+
+      - name: Setup Golang
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.4'
+
+      - name: Install app dependencies
+        run: go mod tidy
+
+      - name: Build gateway service
+        run: go build -o gateway ./cmd/gateway/main.go
+
+      - name: Build reservation service
+        run: go build -o reservation ./cmd/reservation/main.go
+
+      - name: Build loyalty service
+        run: go build -o loyalty ./cmd/loyalty/main.go
+
+      - name: Build payment service
+        run: go build -o payment ./cmd/payment/main.go
+
+      # - name: Build images
+      #   timeout-minutes: 10
+      #   run: docker compose build
+
+      - name: Run containers
+        timeout-minutes: 5
+        run: |
+          docker compose up -d
+          ./scripts/wait-script.sh
+        env:
+          WAIT_PORTS: 8080,8070,8060,8050
+      
+      - name: Sleep
+        run: sleep 30s
+        shell: bash
+
+      - name: Run API Tests
+        uses: matt-ball/newman-action@master
+        with:
+          collection: postman/collection.json
+          environment: postman/environment.json
+          delayRequest: 100
+          reporters: '[ "cli" ]'
+      
+      - name: Show gateway service log
+        if: always()
+        run: cat logs/gateway.log
+      
+      - name: Show reservation service log
+        if: always()
+        run: cat logs/reservation.log
+      
+      - name: Show loyalty service log
+        if: always()
+        run: cat logs/loyalty.log
+      
+      - name: Show payment service log
+        if: always()
+        run: cat logs/payment.log
+
+      - uses: education/autograding@v1
+        id: autograder
+        continue-on-error: true
+
+      # - name: Github auto grader mark
+      #   uses: Romanow/google-sheet-autograder-marker@v1.0
+      #   with:
+      #     google_token: ${{secrets.GOOGLE_API_KEY}}
+      #     sheet_id: "1xkgjUX6Qmk7rdJG-QPOToav-HWWtthJjnShIKnw3oIY"
+      #     homework_number: 2
+      #     user_column: 'D'
+      #     column_offset: 'F'
+      #     mark: "'+"
+
+      - name: Stop containers
+        if: always()
+        continue-on-error: true
+        run: docker compose down -v
