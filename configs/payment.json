@@ -1,0 +1,5 @@
+{
+    "host": "localhost",
+    "port": 8060,
+    "connDb": "postgres://program:test@localhost:5432/payments"
+}

@@ -1,0 +1,13 @@
+{
+    "host": "localhost",
+    "port": 8080,
+
+    "loayltyHost": "localhost",
+    "loyaltyPort": 8050,
+
+    "paymentHost": "localhost",
+    "paymentPort": 8060,
+
+    "reservHost": "localhost",
+    "reservPort": 8070
+}

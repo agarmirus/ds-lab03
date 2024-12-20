@@ -4,6 +4,7 @@ services:
     image: library/postgres:13
     container_name: postgres
     restart: on-failure
+    network_mode: "host"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: "postgres"
@@ -11,10 +12,68 @@ services:
     volumes:
       - db-data:/var/lib/postgresql/data
       - ./postgres/:/docker-entrypoint-initdb.d/
-    ports:
-      - "5432:5432"
+    # ports:
+    #   - "5432:5432"
 
-# TODO добавить сервисы
+  gateway:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: gateway
+    image: gateway-image
+    container_name: gateway
+    restart: on-failure
+    network_mode: "host"
+    # ports:
+    #   - "8080:8080"
+    volumes:
+      - ./logs/:/logs/
+  
+  loyalty:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: loyalty
+    image: loyalty-image
+    container_name: loyalty
+    restart: on-failure
+    network_mode: "host"
+    # ports:
+    #   - "8050:8050"
+    volumes:
+      - ./logs/:/logs/
+  
+  payment:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: payment
+    image: payment-image
+    container_name: payment
+    restart: on-failure
+    network_mode: "host"
+    # ports:
+    #   - "8060:8060"
+    volumes:
+      - ./logs/:/logs/
+
+  reservation:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: reservation
+    image: reservation-image
+    container_name: reservation
+    restart: on-failure
+    network_mode: "host"
+    # ports:
+    #   - "8070:8070"
+    volumes:
+      - ./logs/:/logs/
 
 volumes:
   db-data:
