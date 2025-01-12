@@ -18,6 +18,8 @@ import (
 	"github.com/agarmirus/ds-lab02/internal/models"
 	"github.com/agarmirus/ds-lab02/internal/serverrors"
 	"github.com/google/uuid"
+
+	"github.com/sony/gobreaker/v2"
 )
 
 type GatewayService struct {
@@ -29,6 +31,28 @@ type GatewayService struct {
 
 	loyaltyServiceHost string
 	loyaltyServicePort int
+
+	getAllHotelsCb         *gobreaker.CircuitBreaker[[]models.Hotel]
+	getUserReservsCb       *gobreaker.CircuitBreaker[[]models.Reservation]
+	getHotelByIdCb         *gobreaker.CircuitBreaker[models.Hotel]
+	getPaymentByUidCb      *gobreaker.CircuitBreaker[models.Payment]
+	getHotelByUidCb        *gobreaker.CircuitBreaker[models.Hotel]
+	getReservByUidCb       *gobreaker.CircuitBreaker[models.Reservation]
+	getLoyaltyByUsernameCb *gobreaker.CircuitBreaker[models.Loyalty]
+}
+
+func initCb[T any](name string, cbMaxFailsCount int) *gobreaker.CircuitBreaker[T] {
+	st := gobreaker.Settings{
+		Name: name,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures > uint32(cbMaxFailsCount)
+		},
+		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
+			log.Println(`[WARNING] circuit breaker`, name, `changed its state from`, from.String(), `to`, to.String())
+		},
+	}
+
+	return gobreaker.NewCircuitBreaker[T](st)
 }
 
 func NewGatewayService(
@@ -38,6 +62,7 @@ func NewGatewayService(
 	paymentServicePort int,
 	loyaltyServiceHost string,
 	loyaltyServicePort int,
+	cbMaxFailsCount int,
 ) IGatewayService {
 	return &GatewayService{
 		reservServiceHost,
@@ -46,6 +71,13 @@ func NewGatewayService(
 		paymentServicePort,
 		loyaltyServiceHost,
 		loyaltyServicePort,
+		initCb[[]models.Hotel](`get_all_hotels_cb`, cbMaxFailsCount),
+		initCb[[]models.Reservation](`get_user_reservs_cb`, cbMaxFailsCount),
+		initCb[models.Hotel](`get_hotel_by_id_cb`, cbMaxFailsCount),
+		initCb[models.Payment](`get_payment_by_uid_cb`, cbMaxFailsCount),
+		initCb[models.Hotel](`get_hotel_by_uid_cb`, cbMaxFailsCount),
+		initCb[models.Reservation](`get_reserv_by_uid_cb`, cbMaxFailsCount),
+		initCb[models.Loyalty](`get_loyalty_by_username_cb`, cbMaxFailsCount),
 	}
 }
 
@@ -53,51 +85,61 @@ func (service *GatewayService) performAllHotelsGetRequest(
 	page int,
 	pageSize int,
 ) (hotelsSlice []models.Hotel, err error) {
-	hotelsSlice = make([]models.Hotel, 0)
+	hotelsSlice, err = service.getAllHotelsCb.Execute(
+		func() (hotelsSlice []models.Hotel, err error) {
+			hotelsSlice = make([]models.Hotel, 0)
 
-	req, err := http.NewRequest(
-		"GET",
-		fmt.Sprintf(
-			"http://%s:%d/api/v1/hotels?page=%d&size=%d",
-			service.reservServiceHost,
-			service.reservServicePort,
-			page,
-			pageSize,
-		),
-		nil,
+			req, err := http.NewRequest(
+				"GET",
+				fmt.Sprintf(
+					"http://%s:%d/api/v1/hotels?page=%d&size=%d",
+					service.reservServiceHost,
+					service.reservServicePort,
+					page,
+					pageSize,
+				),
+				nil,
+			)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performAllHotelsGetRequest. Error while creating new HTTP-request: ", err)
+				return hotelsSlice, serverrors.ErrNewRequestForming
+			}
+
+			res, err := http.DefaultClient.Do(req)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performAllHotelsGetRequest. Error while sending request:", err)
+				return hotelsSlice, serverrors.ErrRequestSend
+			}
+
+			defer res.Body.Close()
+
+			if res.StatusCode == http.StatusNotFound {
+				log.Println("[INFO] GatewayService.performAllHotelsGetRequest. Empty hotels result")
+				return make([]models.Hotel, 0), nil
+			}
+
+			resBody, err := io.ReadAll(res.Body)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performAllHotelsGetRequest. Error while reading response:", err)
+				return hotelsSlice, serverrors.ErrResponseRead
+			}
+
+			err = json.Unmarshal(resBody, &hotelsSlice)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performAllHotelsGetRequest. Error while parsing JSON response body:", err)
+				return hotelsSlice, serverrors.ErrResponseParse
+			}
+
+			return hotelsSlice, nil
+		},
 	)
 
 	if err != nil {
-		log.Println("[ERROR] GatewayService.performAllHotelsGetRequest. Error while creating new HTTP-request: ", err)
-		return hotelsSlice, serverrors.ErrNewRequestForming
-	}
-
-	res, err := http.DefaultClient.Do(req)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performAllHotelsGetRequest. Error while sending request:", err)
-		return hotelsSlice, serverrors.ErrRequestSend
-	}
-
-	defer res.Body.Close()
-
-	if res.StatusCode == http.StatusNotFound {
-		log.Println("[INFO] GatewayService.performAllHotelsGetRequest. Empty hotels result")
-		return make([]models.Hotel, 0), nil
-	}
-
-	resBody, err := io.ReadAll(res.Body)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performAllHotelsGetRequest. Error while reading response:", err)
-		return hotelsSlice, serverrors.ErrResponseRead
-	}
-
-	err = json.Unmarshal(resBody, &hotelsSlice)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performAllHotelsGetRequest. Error while parsing JSON response body:", err)
-		return hotelsSlice, serverrors.ErrResponseParse
+		return make([]models.Hotel, 0), err
 	}
 
 	return hotelsSlice, nil
@@ -106,50 +148,60 @@ func (service *GatewayService) performAllHotelsGetRequest(
 func (service *GatewayService) performUserReservsGetRequest(
 	username string,
 ) (userReservsSlice []models.Reservation, err error) {
-	userReservsSlice = make([]models.Reservation, 0)
+	userReservsSlice, err = service.getUserReservsCb.Execute(
+		func() (userReservsSlice []models.Reservation, err error) {
+			userReservsSlice = make([]models.Reservation, 0)
 
-	req, err := http.NewRequest(
-		"GET",
-		fmt.Sprintf(
-			"http://%s:%d/api/v1/reservations",
-			service.reservServiceHost,
-			service.reservServicePort,
-		),
-		nil,
+			req, err := http.NewRequest(
+				"GET",
+				fmt.Sprintf(
+					"http://%s:%d/api/v1/reservations",
+					service.reservServiceHost,
+					service.reservServicePort,
+				),
+				nil,
+			)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performUserReservsGetRequest. Error while creating new request:", err)
+				return userReservsSlice, serverrors.ErrNewRequestForming
+			}
+
+			req.Header.Add(`X-User-Name`, username)
+			res, err := http.DefaultClient.Do(req)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performUserReservsGetRequest. Error while sending request:", err)
+				return userReservsSlice, serverrors.ErrRequestSend
+			}
+
+			defer res.Body.Close()
+
+			if res.StatusCode == http.StatusNotFound {
+				log.Println("[INFO] GatewayService.performUserReservsGetRequest. Empty user reservations result")
+				return make([]models.Reservation, 0), nil
+			}
+
+			resBody, err := io.ReadAll(res.Body)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performUserReservsGetRequest. Error while reading response:", err)
+				return userReservsSlice, serverrors.ErrResponseRead
+			}
+
+			err = json.Unmarshal(resBody, &userReservsSlice)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performUserReservsGetRequest. Error while parsing JSON response body:", err)
+				return userReservsSlice, serverrors.ErrResponseParse
+			}
+
+			return userReservsSlice, nil
+		},
 	)
 
 	if err != nil {
-		log.Println("[ERROR] GatewayService.performUserReservsGetRequest. Error while creating new request:", err)
-		return userReservsSlice, serverrors.ErrNewRequestForming
-	}
-
-	req.Header.Add(`X-User-Name`, username)
-	res, err := http.DefaultClient.Do(req)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performUserReservsGetRequest. Error while sending request:", err)
-		return userReservsSlice, serverrors.ErrRequestSend
-	}
-
-	defer res.Body.Close()
-
-	if res.StatusCode == http.StatusNotFound {
-		log.Println("[INFO] GatewayService.performUserReservsGetRequest. Empty user reservations result")
-		return make([]models.Reservation, 0), nil
-	}
-
-	resBody, err := io.ReadAll(res.Body)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performUserReservsGetRequest. Error while reading response:", err)
-		return userReservsSlice, serverrors.ErrResponseRead
-	}
-
-	err = json.Unmarshal(resBody, &userReservsSlice)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performUserReservsGetRequest. Error while parsing JSON response body:", err)
-		return userReservsSlice, serverrors.ErrResponseParse
+		return make([]models.Reservation, 0), err
 	}
 
 	return userReservsSlice, nil
@@ -158,51 +210,57 @@ func (service *GatewayService) performUserReservsGetRequest(
 func (service *GatewayService) performHotelByIdGetRequest(
 	hotelId int,
 ) (hotel models.Hotel, err error) {
-	req, err := http.NewRequest(
-		"GET",
-		fmt.Sprintf(
-			"http://%s:%d/api/v1/hotels",
-			service.reservServiceHost,
-			service.reservServicePort,
-		),
-		nil,
+	hotel, err = service.getHotelByIdCb.Execute(
+		func() (hotel models.Hotel, err error) {
+			req, err := http.NewRequest(
+				"GET",
+				fmt.Sprintf(
+					"http://%s:%d/api/v1/hotels",
+					service.reservServiceHost,
+					service.reservServicePort,
+				),
+				nil,
+			)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performHotelByIdGetRequest. Error while creating new request:", err)
+				return hotel, serverrors.ErrNewRequestForming
+			}
+
+			req.Header.Add(`Hotel-Id`, strconv.Itoa(hotelId))
+			res, err := http.DefaultClient.Do(req)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performHotelByIdGetRequest. Error while sending request:", err)
+				return hotel, serverrors.ErrRequestSend
+			}
+
+			defer res.Body.Close()
+
+			if res.StatusCode == http.StatusNotFound {
+				log.Println("[ERROR] GatewayService.performHotelByIdGetRequest. Hotel not found")
+				return hotel, serverrors.ErrEntityNotFound
+			}
+
+			resBody, err := io.ReadAll(res.Body)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performHotelByIdGetRequest. Error while reading response:", err)
+				return hotel, serverrors.ErrResponseRead
+			}
+
+			err = json.Unmarshal(resBody, &hotel)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performHotelByIdGetRequest. Error while parsing JSON response body:", err)
+				return hotel, serverrors.ErrResponseParse
+			}
+
+			return hotel, nil
+		},
 	)
 
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performHotelByIdGetRequest. Error while creating new request:", err)
-		return hotel, serverrors.ErrNewRequestForming
-	}
-
-	req.Header.Add(`Hotel-Id`, strconv.Itoa(hotelId))
-	res, err := http.DefaultClient.Do(req)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performHotelByIdGetRequest. Error while sending request:", err)
-		return hotel, serverrors.ErrRequestSend
-	}
-
-	defer res.Body.Close()
-
-	if res.StatusCode == http.StatusNotFound {
-		log.Println("[ERROR] GatewayService.performHotelByIdGetRequest. Hotel not found")
-		return hotel, serverrors.ErrEntityNotFound
-	}
-
-	resBody, err := io.ReadAll(res.Body)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performHotelByIdGetRequest. Error while reading response:", err)
-		return hotel, serverrors.ErrResponseRead
-	}
-
-	err = json.Unmarshal(resBody, &hotel)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performHotelByIdGetRequest. Error while parsing JSON response body:", err)
-		return hotel, serverrors.ErrResponseParse
-	}
-
-	return hotel, nil
+	return hotel, err
 }
 
 func (service *GatewayService) performReservsHotelsGetRequest(
@@ -228,51 +286,57 @@ func (service *GatewayService) performReservsHotelsGetRequest(
 func (service *GatewayService) performPaymentByUidGetRequest(
 	paymentUid string,
 ) (payment models.Payment, err error) {
-	req, err := http.NewRequest(
-		"GET",
-		fmt.Sprintf(
-			"http://%s:%d/api/v1/payment/%s",
-			service.paymentServiceHost,
-			service.paymentServicePort,
-			paymentUid,
-		),
-		nil,
+	payment, err = service.getPaymentByUidCb.Execute(
+		func() (payment models.Payment, err error) {
+			req, err := http.NewRequest(
+				"GET",
+				fmt.Sprintf(
+					"http://%s:%d/api/v1/payment/%s",
+					service.paymentServiceHost,
+					service.paymentServicePort,
+					paymentUid,
+				),
+				nil,
+			)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performPaymentByUidGetRequest. Error while creating new request:", err)
+				return payment, serverrors.ErrNewRequestForming
+			}
+
+			res, err := http.DefaultClient.Do(req)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performPaymentByUidGetRequest. Error while sending request:", err)
+				return payment, serverrors.ErrRequestSend
+			}
+
+			defer res.Body.Close()
+
+			if res.StatusCode == http.StatusNotFound {
+				log.Println("[ERROR] GatewayService.performPaymentByUidGetRequest. Payment not found")
+				return payment, serverrors.ErrEntityNotFound
+			}
+
+			resBody, err := io.ReadAll(res.Body)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performPaymentByUidGetRequest. Error while reading response:", err)
+				return payment, serverrors.ErrResponseRead
+			}
+
+			err = json.Unmarshal(resBody, &payment)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performPaymentByUidGetRequest. Error while parsing JSON response body:", err)
+				return payment, serverrors.ErrResponseParse
+			}
+
+			return payment, nil
+		},
 	)
 
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performPaymentByUidGetRequest. Error while creating new request:", err)
-		return payment, serverrors.ErrNewRequestForming
-	}
-
-	res, err := http.DefaultClient.Do(req)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performPaymentByUidGetRequest. Error while sending request:", err)
-		return payment, serverrors.ErrRequestSend
-	}
-
-	defer res.Body.Close()
-
-	if res.StatusCode == http.StatusNotFound {
-		log.Println("[ERROR] GatewayService.performPaymentByUidGetRequest. Payment not found")
-		return payment, serverrors.ErrEntityNotFound
-	}
-
-	resBody, err := io.ReadAll(res.Body)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performPaymentByUidGetRequest. Error while reading response:", err)
-		return payment, serverrors.ErrResponseRead
-	}
-
-	err = json.Unmarshal(resBody, &payment)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performPaymentByUidGetRequest. Error while parsing JSON response body:", err)
-		return payment, serverrors.ErrResponseParse
-	}
-
-	return payment, nil
+	return payment, err
 }
 
 func (service *GatewayService) performReservsPaymentsGetRequest(
@@ -298,51 +362,57 @@ func (service *GatewayService) performReservsPaymentsGetRequest(
 func (service *GatewayService) performHotelByUidGetRequest(
 	hotelUid string,
 ) (hotel models.Hotel, err error) {
-	req, err := http.NewRequest(
-		"GET",
-		fmt.Sprintf(
-			"http://%s:%d/api/v1/hotels/%s",
-			service.reservServiceHost,
-			service.reservServicePort,
-			hotelUid,
-		),
-		nil,
+	hotel, err = service.getHotelByUidCb.Execute(
+		func() (hotel models.Hotel, err error) {
+			req, err := http.NewRequest(
+				"GET",
+				fmt.Sprintf(
+					"http://%s:%d/api/v1/hotels/%s",
+					service.reservServiceHost,
+					service.reservServicePort,
+					hotelUid,
+				),
+				nil,
+			)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performHotelByUidGetRequest. Error while creating new request:", err)
+				return hotel, serverrors.ErrNewRequestForming
+			}
+
+			res, err := http.DefaultClient.Do(req)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performHotelByUidGetRequest. Error while sending request:", err)
+				return hotel, serverrors.ErrRequestSend
+			}
+
+			defer res.Body.Close()
+
+			if res.StatusCode == http.StatusNotFound {
+				log.Println("[ERROR] GatewayService.performHotelByUidGetRequest. Hotel not found")
+				return hotel, serverrors.ErrEntityNotFound
+			}
+
+			resBody, err := io.ReadAll(res.Body)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performHotelByUidGetRequest. Error while reading response:", err)
+				return hotel, serverrors.ErrResponseRead
+			}
+
+			err = json.Unmarshal(resBody, &hotel)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performHotelByUidGetRequest. Error while parsing JSON response body:", err)
+				return hotel, serverrors.ErrResponseParse
+			}
+
+			return hotel, nil
+		},
 	)
 
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performHotelByUidGetRequest. Error while creating new request:", err)
-		return hotel, serverrors.ErrNewRequestForming
-	}
-
-	res, err := http.DefaultClient.Do(req)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performHotelByUidGetRequest. Error while sending request:", err)
-		return hotel, serverrors.ErrRequestSend
-	}
-
-	defer res.Body.Close()
-
-	if res.StatusCode == http.StatusNotFound {
-		log.Println("[ERROR] GatewayService.performHotelByUidGetRequest. Hotel not found")
-		return hotel, serverrors.ErrEntityNotFound
-	}
-
-	resBody, err := io.ReadAll(res.Body)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performHotelByUidGetRequest. Error while reading response:", err)
-		return hotel, serverrors.ErrResponseRead
-	}
-
-	err = json.Unmarshal(resBody, &hotel)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performHotelByUidGetRequest. Error while parsing JSON response body:", err)
-		return hotel, serverrors.ErrResponseParse
-	}
-
-	return hotel, nil
+	return hotel, err
 }
 
 func (service *GatewayService) performPaymentPostRequest(
@@ -494,101 +564,113 @@ func (service *GatewayService) performReservationPostRequest(
 func (service *GatewayService) performReservGetRequest(
 	reservUid string,
 ) (reserv models.Reservation, err error) {
-	req, err := http.NewRequest(
-		"GET",
-		fmt.Sprintf(
-			"http://%s:%d/api/v1/reservations/%s",
-			service.reservServiceHost,
-			service.reservServicePort,
-			reservUid,
-		),
-		nil,
+	reserv, err = service.getReservByUidCb.Execute(
+		func() (reserv models.Reservation, err error) {
+			req, err := http.NewRequest(
+				"GET",
+				fmt.Sprintf(
+					"http://%s:%d/api/v1/reservations/%s",
+					service.reservServiceHost,
+					service.reservServicePort,
+					reservUid,
+				),
+				nil,
+			)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performReservGetRequest. Error while creating new request:", err)
+				return reserv, serverrors.ErrNewRequestForming
+			}
+
+			res, err := http.DefaultClient.Do(req)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performReservGetRequest. Error while sending request:", err)
+				return reserv, serverrors.ErrRequestSend
+			}
+
+			defer res.Body.Close()
+
+			if res.StatusCode == http.StatusNotFound {
+				log.Println("[ERROR] GatewayService.performReservGetRequest. Reservation not found")
+				return reserv, serverrors.ErrEntityNotFound
+			}
+
+			resBody, err := io.ReadAll(res.Body)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performReservGetRequest. Error while reading response:", err)
+				return reserv, serverrors.ErrResponseRead
+			}
+
+			err = json.Unmarshal(resBody, &reserv)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performReservGetRequest. Error while parsing JSON response body:", err)
+				return reserv, serverrors.ErrResponseParse
+			}
+
+			return reserv, nil
+		},
 	)
 
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performReservGetRequest. Error while creating new request:", err)
-		return reserv, serverrors.ErrNewRequestForming
-	}
-
-	res, err := http.DefaultClient.Do(req)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performReservGetRequest. Error while sending request:", err)
-		return reserv, serverrors.ErrRequestSend
-	}
-
-	defer res.Body.Close()
-
-	if res.StatusCode == http.StatusNotFound {
-		log.Println("[ERROR] GatewayService.performReservGetRequest. Reservation not found")
-		return reserv, serverrors.ErrEntityNotFound
-	}
-
-	resBody, err := io.ReadAll(res.Body)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performReservGetRequest. Error while reading response:", err)
-		return reserv, serverrors.ErrResponseRead
-	}
-
-	err = json.Unmarshal(resBody, &reserv)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performReservGetRequest. Error while parsing JSON response body:", err)
-		return reserv, serverrors.ErrResponseParse
-	}
-
-	return reserv, nil
+	return reserv, err
 }
 
 func (service *GatewayService) performLoyaltyByUsernameGetRequest(
 	username string,
 ) (loyalty models.Loyalty, err error) {
-	req, err := http.NewRequest(
-		"GET",
-		fmt.Sprintf(
-			"http://%s:%d/api/v1/loyalty",
-			service.loyaltyServiceHost,
-			service.loyaltyServicePort,
-		),
-		nil,
+	loyalty, err = service.getLoyaltyByUsernameCb.Execute(
+		func() (loyalty models.Loyalty, err error) {
+			req, err := http.NewRequest(
+				"GET",
+				fmt.Sprintf(
+					"http://%s:%d/api/v1/loyalty",
+					service.loyaltyServiceHost,
+					service.loyaltyServicePort,
+				),
+				nil,
+			)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performLoyaltyByUsernameGetRequest. Error while creating new request:", err)
+				return loyalty, serverrors.ErrNewRequestForming
+			}
+
+			req.Header.Add(`X-User-Name`, username)
+			res, err := http.DefaultClient.Do(req)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performLoyaltyByUsernameGetRequest. Error while sending request:", err)
+				return loyalty, serverrors.ErrRequestSend
+			}
+
+			defer res.Body.Close()
+
+			if res.StatusCode == http.StatusNotFound {
+				log.Println("[ERROR] GatewayService.performLoyaltyByUsernameGetRequest. Loyalty not found")
+				return loyalty, serverrors.ErrEntityNotFound
+			}
+
+			resBody, err := io.ReadAll(res.Body)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performLoyaltyByUsernameGetRequest. Error while reading response:", err)
+				return loyalty, serverrors.ErrResponseRead
+			}
+
+			err = json.Unmarshal(resBody, &loyalty)
+
+			if err != nil {
+				log.Println("[ERROR] GatewayService.performLoyaltyByUsernameGetRequest. Error while parsing JSON response body:", err)
+				return loyalty, serverrors.ErrResponseParse
+			}
+
+			return loyalty, nil
+		},
 	)
 
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performLoyaltyByUsernameGetRequest. Error while creating new request:", err)
-		return loyalty, serverrors.ErrNewRequestForming
-	}
-
-	req.Header.Add(`X-User-Name`, username)
-	res, err := http.DefaultClient.Do(req)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performLoyaltyByUsernameGetRequest. Error while sending request:", err)
-		return loyalty, serverrors.ErrRequestSend
-	}
-
-	defer res.Body.Close()
-
-	if res.StatusCode == http.StatusNotFound {
-		log.Println("[ERROR] GatewayService.performLoyaltyByUsernameGetRequest. Loyalty not found")
-		return loyalty, serverrors.ErrEntityNotFound
-	}
-
-	resBody, err := io.ReadAll(res.Body)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performLoyaltyByUsernameGetRequest. Error while reading response:", err)
-		return loyalty, serverrors.ErrResponseRead
-	}
-
-	err = json.Unmarshal(resBody, &loyalty)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.performLoyaltyByUsernameGetRequest. Error while parsing JSON response body:", err)
-		return loyalty, serverrors.ErrResponseParse
-	}
-
-	return loyalty, nil
+	return loyalty, err
 }
 
 func (service *GatewayService) performReservPutRequest(

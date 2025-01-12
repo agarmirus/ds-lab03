@@ -12,14 +12,15 @@ import (
 )
 
 type gatewayConfigDataStruct struct {
-	Host        string `json:"host"`
-	LoayltyHost string `json:"loayltyHost"`
-	PaymentHost string `json:"paymentHost"`
-	ReservHost  string `json:"reservHost"`
-	Port        int    `json:"port"`
-	LoyaltyPort int    `json:"loyaltyPort"`
-	PaymentPort int    `json:"paymentPort"`
-	ReservPort  int    `json:"reservPort"`
+	Host            string `json:"host"`
+	LoayltyHost     string `json:"loayltyHost"`
+	PaymentHost     string `json:"paymentHost"`
+	ReservHost      string `json:"reservHost"`
+	Port            int    `json:"port"`
+	LoyaltyPort     int    `json:"loyaltyPort"`
+	PaymentPort     int    `json:"paymentPort"`
+	ReservPort      int    `json:"reservPort"`
+	MaxRequestFails int    `json:"maxRequestFails"`
 }
 
 func readConfig(path string, configData *gatewayConfigDataStruct) (err error) {
@@ -48,6 +49,7 @@ func buildService(configData *gatewayConfigDataStruct) (controller controllers.I
 		configData.PaymentPort,
 		configData.LoayltyHost,
 		configData.LoyaltyPort,
+		configData.MaxRequestFails,
 	)
 
 	controller = controllers.NewGatewayController(

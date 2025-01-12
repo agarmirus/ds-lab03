@@ -9,5 +9,7 @@
     "paymentPort": 8060,
 
     "reservHost": "localhost",
-    "reservPort": 8070
+    "reservPort": 8070,
+
+    "maxRequestFails": 10
 }
