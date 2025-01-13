@@ -62,12 +62,7 @@ jobs:
       #     reporters: '[ "cli" ]'
       
       - name: Run API And Load Tests
-        run: ./scripts/test-script.sh
-        env:
-          VARIANT: v2
-          SERVICE_NAME: loyalty
-          PORT_NUMBER: 8050
-
+        run: sh ./scripts/test-script.sh v2 loyalty 8050
 
       - uses: education/autograding@v1
         id: autograder
