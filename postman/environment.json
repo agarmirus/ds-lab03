@@ -1,7 +1,7 @@
 {
   "_": {
     "postman_variable_scope": "environment",
-    "postman_exported_at": "2025-01-13T02:54:45.405Z",
+    "postman_exported_at": "2025-01-13T03:16:25.491Z",
     "postman_exported_using": "Newman/6.1.3"
   },
   "id": "ec373c4f-f1e2-4d5c-a7ec-cab7c7136014",
@@ -49,11 +49,11 @@
     },
     {
       "type": "any",
-      "value": "e5d42c81-80f0-4cea-84ba-39752cdd13f3",
+      "value": "5dafa0a9-df2c-4140-968e-f85287d42e06",
       "key": "reservationUid"
     }
   ],
   "_postman_variable_scope": "environment",
-  "_postman_exported_at": "2025-01-13T02:55:16.764Z",
+  "_postman_exported_at": "2025-01-13T03:16:56.834Z",
   "_postman_exported_using": "Newman/6.1.3"
 }
