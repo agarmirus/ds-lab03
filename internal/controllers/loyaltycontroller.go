@@ -67,6 +67,41 @@ func (controller *LoyaltyController) handleLoyaltyByUsernameGet(res http.Respons
 	res.Write(loyaltyJSON)
 }
 
+func (controller *LoyaltyController) handleLoyaltyByUsernamePatch(res http.ResponseWriter, req *http.Request) {
+	log.Println("[INFO] LoyaltyController.handleLoyaltyByUsernameGet. Handling loyalty by username GET request")
+
+	username := req.Header.Get(`X-User-Name`)
+
+	if strings.Trim(username, ` `) == `` {
+		log.Println("[ERROR] LoyaltyController.handleLoyaltyByUsernameGet. Invalid username: " + username)
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	delta, err := strconv.Atoi(req.Header.Get(`Delta`))
+
+	if err != nil {
+		log.Println("[ERROR] LoyaltyController.handleLoyaltyByIdPut. Invalid loyalty discount delta: ", err)
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	err = controller.service.ChangeLoyaltyCountByUsername(username, delta)
+
+	if err != nil {
+		log.Println("[ERROR] LoyaltyController.handleLoyaltyByUsernameGet. service.ReadLoyaltyByUsername returned error: ", err)
+		if errors.Is(err, serverrors.ErrEntityNotFound) {
+			res.WriteHeader(http.StatusNotFound)
+		} else {
+			res.WriteHeader(http.StatusInternalServerError)
+		}
+
+		return
+	}
+
+	res.WriteHeader(http.StatusNoContent)
+}
+
 func (controller *LoyaltyController) handleLoyaltyByIdPut(res http.ResponseWriter, req *http.Request) {
 	log.Println("[INFO] LoyaltyController.handleLoyaltyByIdPut. Handling loyalty by id PUT request")
 
@@ -118,6 +153,9 @@ func (controller *LoyaltyController) handleLoyaltyRequest(res http.ResponseWrite
 	if req.Method == `GET` {
 		log.Println("[INFO] LoyaltyController.handleLoyaltyByIdRequest. Got loyalty by username GET request")
 		controller.handleLoyaltyByUsernameGet(res, req)
+	} else if req.Method == `PATCH` {
+		log.Println("[INFO] LoyaltyController.handleLoyaltyByIdRequest. Got loyalty by username PATCH request")
+		controller.handleLoyaltyByUsernamePatch(res, req)
 	} else {
 		log.Println("[ERROR] LoyaltyController.handleLoyaltyRequest. Method not allowed")
 		res.WriteHeader(http.StatusMethodNotAllowed)

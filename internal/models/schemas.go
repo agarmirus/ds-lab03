@@ -50,9 +50,9 @@ type PaymentInfo struct {
 }
 
 type LoyaltyInfoResponse struct {
-	Status           string `json:"status"`
-	Discount         int    `json:"discount"`
-	ReservationCount int    `json:"reservationCount"`
+	Status           string `json:"status,omitempty"`
+	Discount         int    `json:"discount,omitempty"`
+	ReservationCount int    `json:"reservationCount,omitempty"`
 }
 
 type HotelResponse struct {
@@ -120,7 +120,7 @@ type ValidationErrorResponse struct {
 }
 
 type ErrorResponse struct {
-	Message string `json:"message"`
+	Message string `json:"message,omitempty"`
 }
 
 func HotelToHotelReponse(

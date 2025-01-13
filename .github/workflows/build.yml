@@ -61,21 +61,8 @@ jobs:
           delayRequest: 100
           reporters: '[ "cli" ]'
       
-      - name: Show gateway service log
-        if: always()
-        run: cat logs/gateway.log
-      
-      - name: Show reservation service log
-        if: always()
-        run: cat logs/reservation.log
-      
-      - name: Show loyalty service log
-        if: always()
-        run: cat logs/loyalty.log
-      
-      - name: Show payment service log
-        if: always()
-        run: cat logs/payment.log
+      - name: Run Load Tests
+        run: sh ./scripts/test-script.sh v2 loyalty 8050
 
       - uses: education/autograding@v1
         id: autograder

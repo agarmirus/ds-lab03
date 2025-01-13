@@ -43,3 +43,30 @@ func (service *LoyaltyService) UpdateLoyaltyById(loyalty *models.Loyalty) (updat
 
 	return updatedLoyalty, err
 }
+
+func (service *LoyaltyService) ChangeLoyaltyCountByUsername(username string, delta int) error {
+	loyaltiesLst, err := service.loyaltyDAO.GetByAttribute(`username`, username)
+
+	if err != nil {
+		log.Println("[ERROR] LoyaltyService.ChangeLoyaltyCountByUsername. loyaltyDAO.GetByAttribute returned error:", err)
+		return err
+	}
+
+	if loyaltiesLst.Len() == 0 {
+		log.Println("[ERROR] LoyaltyService.ChangeLoyaltyCountByUsername. Entity not found")
+		return serverrors.ErrEntityNotFound
+	}
+
+	desiredLoyalty := loyaltiesLst.Front().Value.(models.Loyalty)
+
+	desiredLoyalty.ReservationCount += delta
+	models.UpdateLoyaltyStatus(&desiredLoyalty)
+
+	_, err = service.loyaltyDAO.Update(&desiredLoyalty)
+
+	if err != nil {
+		log.Println("[ERROR] LoyaltyService.Update. loyaltyDAO.Update returned error:", err)
+	}
+
+	return err
+}

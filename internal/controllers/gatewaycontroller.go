@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/agarmirus/ds-lab02/internal/models"
+	"github.com/agarmirus/ds-lab02/internal/serverrors"
 	"github.com/agarmirus/ds-lab02/internal/services"
 	"github.com/google/uuid"
 )
@@ -45,6 +47,12 @@ func (controller *GatewayController) handleAllHotelsGet(res http.ResponseWriter,
 
 	if err != nil {
 		log.Println("[ERROR] GatewayController.handleAllHotelsGet. service.ReadAllHotels returned error: ", err)
+
+		if errors.Is(err, serverrors.ErrRequestSend) {
+			res.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -82,8 +90,11 @@ func (controller *GatewayController) handleUserInfoGet(res http.ResponseWriter, 
 
 	if err != nil {
 		log.Println("[ERROR] GatewayController.handleUserInfoGet. service.ReadUserInfo returned error: ", err)
-		res.WriteHeader(http.StatusInternalServerError)
-		return
+
+		if !errors.Is(err, serverrors.ErrLoyaltyServiceUnavailable) {
+			res.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 	}
 
 	var userInfoResJSON []byte
@@ -114,6 +125,12 @@ func (controller *GatewayController) handleUserReservationsGet(res http.Response
 
 	if err != nil {
 		log.Println("[ERROR] GatewayController.handleUserReservationsGet. service.ReadUserReservations returned error: ", err)
+
+		if errors.Is(err, serverrors.ErrRequestSend) {
+			res.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -169,6 +186,18 @@ func (controller *GatewayController) handleNewReservationPost(res http.ResponseW
 
 		if err != nil {
 			log.Println("[ERROR] GatewayController.handleNewReservationPost. service.CreateReservation returned error: ", err)
+
+			if errors.Is(err, serverrors.ErrLoyaltyServiceUnavailable) {
+				errRes := models.ErrorResponse{Message: `Loyalty Service unavailable`}
+
+				errResJSON, _ := json.Marshal(errRes)
+
+				res.Header().Add(`Content-Type`, `application/json`)
+				res.WriteHeader(http.StatusServiceUnavailable)
+				res.Write(errResJSON)
+				return
+			}
+
 			res.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -216,6 +245,12 @@ func (controller *GatewayController) handleSingleReservationGet(res http.Respons
 
 	if err != nil {
 		log.Println("[ERROR] GatewayController.handleSingleReservationGet. service.ReadReservation returned error: ", err)
+
+		if errors.Is(err, serverrors.ErrRequestSend) {
+			res.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -271,6 +306,18 @@ func (controller *GatewayController) handleLoyaltyGet(res http.ResponseWriter, r
 
 	if err != nil {
 		log.Println("[ERROR] GatewayController.handleLoyaltyGet. service.ReadUserLoyalty returned error: ", err)
+
+		if errors.Is(err, serverrors.ErrLoyaltyServiceUnavailable) {
+			errRes := models.ErrorResponse{Message: `Loyalty Service unavailable`}
+
+			errResJSON, _ := json.Marshal(errRes)
+
+			res.Header().Add(`Content-Type`, `application/json`)
+			res.WriteHeader(http.StatusServiceUnavailable)
+			res.Write(errResJSON)
+			return
+		}
+
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}

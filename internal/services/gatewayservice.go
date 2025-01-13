@@ -37,6 +37,8 @@ type GatewayService struct {
 	reservsResCb     *gobreaker.CircuitBreaker[[]models.ReservationResponse]
 	userInfoResCb    *gobreaker.CircuitBreaker[models.UserInfoResponse]
 	pagResCb         *gobreaker.CircuitBreaker[models.PagiationResponse]
+
+	reQueue chan *http.Request
 }
 
 func initCb[T any](name string, cbMaxFailsCount int) *gobreaker.CircuitBreaker[T] {
@@ -53,6 +55,18 @@ func initCb[T any](name string, cbMaxFailsCount int) *gobreaker.CircuitBreaker[T
 	return gobreaker.NewCircuitBreaker[T](st)
 }
 
+func (service *GatewayService) resetRequests() {
+	for {
+		req := <-service.reQueue
+
+		_, err := http.DefaultClient.Do(req)
+
+		if err != nil {
+			service.reQueue <- req
+		}
+	}
+}
+
 func NewGatewayService(
 	reservServiceHost string,
 	reservServicePort int,
@@ -61,8 +75,9 @@ func NewGatewayService(
 	loyaltyServiceHost string,
 	loyaltyServicePort int,
 	cbMaxFailsCount int,
+	maxResetQueueSize int,
 ) IGatewayService {
-	return &GatewayService{
+	service := &GatewayService{
 		reservServiceHost,
 		reservServicePort,
 		paymentServiceHost,
@@ -74,7 +89,12 @@ func NewGatewayService(
 		initCb[[]models.ReservationResponse](`reservsResCb`, cbMaxFailsCount),
 		initCb[models.UserInfoResponse](`userInfoResCb`, cbMaxFailsCount),
 		initCb[models.PagiationResponse](`pagResCb`, cbMaxFailsCount),
+		make(chan *http.Request, maxResetQueueSize),
 	}
+
+	go service.resetRequests()
+
+	return service
 }
 
 func (service *GatewayService) performAllHotelsGetRequest(
@@ -396,6 +416,7 @@ func (service *GatewayService) performPaymentPostRequest(
 
 	if err != nil {
 		log.Println("[ERROR] GatewayService.performPaymentPostRequest. Error while sending request:", err)
+		service.reQueue <- req
 		return payment, serverrors.ErrRequestSend
 	}
 
@@ -448,6 +469,38 @@ func (service *GatewayService) performLoyaltyPutRequest(
 
 	if err != nil {
 		log.Println("[ERROR] GatewayService.performLoyaltyPutRequest. Error while sending request:", err)
+		service.reQueue <- req
+		return serverrors.ErrRequestSend
+	}
+
+	return nil
+}
+
+func (service *GatewayService) performLoyaltyDecreasePatchRequest(
+	username string,
+) error {
+	req, err := http.NewRequest(
+		"PATCH",
+		fmt.Sprintf(
+			"http://%s:%d/api/v1/loyalty",
+			service.loyaltyServiceHost,
+			service.loyaltyServicePort,
+		),
+		nil,
+	)
+
+	if err != nil {
+		log.Println("[ERROR] GatewayService.performPaymentPostRequest. Error while creating new request:", err)
+		return serverrors.ErrNewRequestForming
+	}
+
+	req.Header.Add(`X-User-Name`, username)
+	req.Header.Add(`Delta`, strconv.Itoa(-1))
+	_, err = http.DefaultClient.Do(req)
+
+	if err != nil {
+		log.Println("[ERROR] GatewayService.performPaymentPostRequest. Error while sending request:", err)
+		service.reQueue <- req
 		return serverrors.ErrRequestSend
 	}
 
@@ -497,6 +550,7 @@ func (service *GatewayService) performReservationPostRequest(
 
 	if err != nil {
 		log.Println("[ERROR] GatewayService.performReservationPostRequest. Error while sending request:", err)
+		service.reQueue <- req
 		return reservation, serverrors.ErrRequestSend
 	}
 
@@ -649,6 +703,7 @@ func (service *GatewayService) performReservPutRequest(
 
 	if err != nil {
 		log.Println("[ERROR] GatewayService.performReservPutRequest. Error while sending request:", err)
+		service.reQueue <- req
 		return serverrors.ErrRequestSend
 	}
 
@@ -685,6 +740,7 @@ func (service *GatewayService) performPaymentPutRequest(
 
 	if err != nil {
 		log.Println("[ERROR] GatewayService.performPaymentPutRequest. Error while sending request:", err)
+		service.reQueue <- req
 		return serverrors.ErrRequestSend
 	}
 
@@ -714,10 +770,6 @@ func (service *GatewayService) ReadAllHotels(
 			return pagRes, nil
 		},
 	)
-
-	if err != nil && errors.Is(err, serverrors.ErrRequestSend) {
-		return models.PagiationResponse{Page: page, PageSize: pageSize}, nil
-	}
 
 	return pagRes, err
 }
@@ -767,7 +819,7 @@ func (service *GatewayService) ReadUserInfo(
 	)
 
 	if err != nil && errors.Is(err, serverrors.ErrRequestSend) {
-		return models.UserInfoResponse{Reservations: make([]models.ReservationResponse, 0)}, nil
+		return models.UserInfoResponse{Reservations: make([]models.ReservationResponse, 0)}, serverrors.ErrLoyaltyServiceUnavailable
 	}
 
 	return userInfoRes, err
@@ -812,10 +864,6 @@ func (service *GatewayService) ReadUserReservations(
 		},
 	)
 
-	if err != nil && errors.Is(err, serverrors.ErrRequestSend) {
-		return make([]models.ReservationResponse, 0), nil
-	}
-
 	return reservsResSlice, err
 }
 
@@ -846,6 +894,11 @@ func (service *GatewayService) CreateReservation(
 
 	if err != nil {
 		log.Println("[ERROR] GatewayService.CreateReservation. performLoyaltyByUsernameGetRequest returned error:", err)
+
+		if errors.Is(err, serverrors.ErrRequestSend) {
+			return crReservRes, serverrors.ErrLoyaltyServiceUnavailable
+		}
+
 		return crReservRes, err
 	}
 
@@ -941,10 +994,6 @@ func (service *GatewayService) ReadReservation(
 		},
 	)
 
-	if err != nil && errors.Is(err, serverrors.ErrRequestSend) {
-		return models.ReservationResponse{ReservationUid: reservUid}, nil
-	}
-
 	return reservRes, err
 }
 
@@ -992,23 +1041,17 @@ func (service *GatewayService) DeleteReservation(
 		return err
 	}
 
-	loyalty, err := service.performLoyaltyByUsernameGetRequest(username)
-
-	if err != nil {
-		log.Println("[ERROR] GatewayService.DeleteReservation. Error while getting loyalty by username: ", err)
-		return err
-	}
-
-	loyalty.ReservationCount--
-	models.UpdateLoyaltyStatus(&loyalty)
-
-	err = service.performLoyaltyPutRequest(&loyalty)
+	err = service.performLoyaltyDecreasePatchRequest(username)
 
 	if err != nil {
 		log.Println("[ERROR] GatewayService.DeleteReservation. Error while puting loyalty: ", err)
+
+		if !errors.Is(err, serverrors.ErrRequestSend) {
+			return err
+		}
 	}
 
-	return err
+	return nil
 }
 
 func (service *GatewayService) ReadUserLoyalty(
@@ -1035,7 +1078,7 @@ func (service *GatewayService) ReadUserLoyalty(
 	)
 
 	if err != nil && errors.Is(err, serverrors.ErrRequestSend) {
-		return models.LoyaltyInfoResponse{Discount: -1}, nil
+		return loyaltyInfoRes, serverrors.ErrLoyaltyServiceUnavailable
 	}
 
 	return loyaltyInfoRes, err

@@ -53,5 +53,7 @@ var ErrResponseParse error = errors.New(`error while parsing service response`)
 // Internal errors
 var ErrJSONParse error = errors.New(`error while writting entity into json`)
 
+var ErrLoyaltyServiceUnavailable error = errors.New(`loyalty service unavailable`)
+
 // Unknown :P
 var ErrUnknown error = errors.New(`unknown error`)

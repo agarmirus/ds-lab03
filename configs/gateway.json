@@ -11,5 +11,6 @@
     "reservHost": "localhost",
     "reservPort": 8070,
 
-    "maxRequestFails": 10
+    "maxRequestFails": 10,
+    "maxResetQueueSize": 1024
 }
