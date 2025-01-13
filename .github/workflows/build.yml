@@ -53,15 +53,15 @@ jobs:
         run: sleep 30s
         shell: bash
 
-      - name: Run API Tests
-        uses: matt-ball/newman-action@master
-        with:
-          collection: postman/collection.json
-          environment: postman/environment.json
-          delayRequest: 100
-          reporters: '[ "cli" ]'
+      # - name: Run API Tests
+      #   uses: matt-ball/newman-action@master
+      #   with:
+      #     collection: postman/collection.json
+      #     environment: postman/environment.json
+      #     delayRequest: 100
+      #     reporters: '[ "cli" ]'
       
-      - name: Run Load Tests
+      - name: Run API And Load Tests
         run: sh ./scripts/test-script.sh v2 loyalty 8050
 
       - uses: education/autograding@v1
@@ -73,7 +73,7 @@ jobs:
       #   with:
       #     google_token: ${{secrets.GOOGLE_API_KEY}}
       #     sheet_id: "1xkgjUX6Qmk7rdJG-QPOToav-HWWtthJjnShIKnw3oIY"
-      #     homework_number: 2
+      #     homework_number: 3
       #     user_column: 'D'
       #     column_offset: 'F'
       #     mark: "'+"
