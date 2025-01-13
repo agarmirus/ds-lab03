@@ -62,7 +62,7 @@ jobs:
       #     reporters: '[ "cli" ]'
       
       - name: Run API And Load Tests
-        run: sh ./scripts/test-script.sh v2 loyalty 8050
+        run: bash ./scripts/test-script.sh v2 loyalty 8050
 
       - uses: education/autograding@v1
         id: autograder
